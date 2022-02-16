@@ -6,96 +6,98 @@ import (
 	"log"
 	"time"
 
-	"github.com/clausecker/nfc/v2"
+	nfc "github.com/clausecker/nfc/v2"
 	"github.com/warthog618/gpiod"
 )
 
+const resetPin = 19
+
+//Listen for all the modulations specified
+var modulations = []nfc.Modulation{
+	{Type: nfc.ISO14443a, BaudRate: nfc.Nbr106},
+	{Type: nfc.ISO14443b, BaudRate: nfc.Nbr106},
+	{Type: nfc.Felica, BaudRate: nfc.Nbr212},
+	{Type: nfc.Felica, BaudRate: nfc.Nbr424},
+	{Type: nfc.Jewel, BaudRate: nfc.Nbr106},
+	{Type: nfc.ISO14443biClass, BaudRate: nfc.Nbr106},
+}
+
 type TagReader struct {
-	TagChannel       chan string
-	reader           *nfc.Device
-	ResetPin         int
-	DeviceConnection string
+	device *nfc.Device
 }
 
-func (reader *TagReader) Init() {
-	dev, err := nfc.Open(reader.DeviceConnection)
+func NewTagReader(deviceConnection string) (*TagReader, error) {
+	dev, err := nfc.Open(deviceConnection)
 	if err != nil {
-		reader.Reset()
-		log.Printf("Cannot communicate with the device: %s \n", err)
-		return
+		return nil, fmt.Errorf("Cannot communicate with the device: %w", err)
 	}
-	reader.reader = &dev
-	err = reader.reader.InitiatorInit()
-	if err != nil {
-		log.Fatal("Failed to initialize")
-		return
+
+	if err := dev.InitiatorInit(); err != nil {
+		return nil, fmt.Errorf("Failed to initialize: %w", err)
 	}
+
+	return &TagReader{
+		device: &dev,
+	}, nil
 }
 
-// Reset Implements the hardware reset by pulling the ResetPin low and then releasing.
-func (reader *TagReader) Reset() {
+// Reset Implements the hardware reset by pressing the ResetPin(19) low and then releasing.
+func (r TagReader) ResetDevice() error {
 	log.Println("Resetting the reader..")
-	//refer to gpiod docs
+
+	// refer to gpiod docs
 	c, err := gpiod.NewChip("gpiochip0")
-	pin, err := c.RequestLine(reader.ResetPin, gpiod.AsOutput(0))
 	if err != nil {
-		log.Println(err)
-		return
+		return fmt.Errorf("Could not open GPIO device: %w ", err)
 	}
-	err = pin.SetValue(1)
+
+	pin, err := c.RequestLine(resetPin, gpiod.AsOutput(0))
 	if err != nil {
-		log.Println(err)
-		return
+		return fmt.Errorf("Could not prepare GPIO line: %w ", err)
 	}
-	time.Sleep(time.Millisecond * 400)
-	err = pin.SetValue(0)
-	if err != nil {
-		log.Println(err)
-		return
+
+	if err := pin.SetValue(1); err != nil {
+		return fmt.Errorf("Could not set reset signal: %w ", err)
 	}
-	time.Sleep(time.Millisecond * 400)
-	err = pin.SetValue(1)
-	time.Sleep(time.Millisecond * 100)
-	if err != nil {
-		log.Println(err)
-		return
+
+	time.Sleep(time.Millisecond * 400) // margin
+
+	if err := pin.SetValue(0); err != nil {
+		return fmt.Errorf("Could not clear reset signal: %w ", err)
 	}
+
+	time.Sleep(time.Millisecond * 400) // margin
+
+	if err := pin.SetValue(1); err != nil {
+		return fmt.Errorf("Could not set reset signal: %w ", err)
+	}
+
+	time.Sleep(time.Millisecond * 100) // margin
+
+	return nil
 }
 
-func (reader *TagReader) Cleanup() {
-	defer reader.reader.Close()
+func (r *TagReader) Close() error {
+	if err := r.device.Close(); err != nil {
+		return fmt.Errorf("Could not close device: %w ", err)
+	}
+
+	return nil
 }
 
-func (reader *TagReader) ListenForTags() {
-	if reader.reader == nil {
-		log.Println("Not ready: NFC connection not yet initialised")
-		return
-	}
-
-	var (
-		err      error
-		tagCount int
-		target   nfc.Target
-		UID      string
-	)
-	//Listen for all the modulations specified
-	var modulations = []nfc.Modulation{
-		{Type: nfc.ISO14443a, BaudRate: nfc.Nbr106},
-		{Type: nfc.ISO14443b, BaudRate: nfc.Nbr106},
-		{Type: nfc.Felica, BaudRate: nfc.Nbr212},
-		{Type: nfc.Felica, BaudRate: nfc.Nbr424},
-		{Type: nfc.Jewel, BaudRate: nfc.Nbr106},
-		{Type: nfc.ISO14443biClass, BaudRate: nfc.Nbr106},
-	}
-	for {
+func (r *TagReader) ListenForTags(tagsChannel chan string, frequencyTicker *time.Ticker) {
+	for range frequencyTicker.C {
 		// Poll for 300ms
-		tagCount, target, err = reader.reader.InitiatorPollTarget(modulations, 1, 300*time.Millisecond)
+		tagCount, target, err := r.device.InitiatorPollTarget(modulations, 1, 300*time.Millisecond)
 		if err != nil {
 			fmt.Println("Error polling the reader", err)
 			continue
 		}
+
 		// Check if any tag was detected
 		if tagCount > 0 {
+			var UID string
+
 			fmt.Printf(target.String())
 			// Transform the target to a specific tag Type and send the UID to the channel
 			switch target.Modulation() {
@@ -136,13 +138,9 @@ func (reader *TagReader) ListenForTags() {
 				UID = hex.EncodeToString(ID[:UIDLen])
 				break
 			}
-			// Send the UID of the tag to main goroutine
-			reader.TagChannel <- UID
-		}
-		time.Sleep(time.Second * 1)
-	}
-}
 
-func NewTagReader(deviceConnection string, tagChannel chan string, resetPin int) *TagReader {
-	return &TagReader{DeviceConnection: deviceConnection, TagChannel: tagChannel, ResetPin: resetPin}
+			// Send the UID of the tag to main goroutine
+			tagsChannel <- UID
+		}
+	}
 }
