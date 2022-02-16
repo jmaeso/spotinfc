@@ -42,7 +42,7 @@ func NewTagReader(deviceConnection string) (*TagReader, error) {
 }
 
 // Reset Implements the hardware reset by pressing the ResetPin(19) low and then releasing.
-func (r TagReader) ResetDevice() error {
+func ResetDevice() error {
 	log.Println("Resetting the reader..")
 
 	// refer to gpiod docs

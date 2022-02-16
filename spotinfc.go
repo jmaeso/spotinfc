@@ -15,7 +15,7 @@ func main() {
 	if err != nil {
 		log.Println("Could not create NFC tag reader: ", err)
 
-		if err := rfidReader.ResetDevice(); err != nil {
+		if err := ResetDevice(); err != nil {
 			log.Println("Could not reset device: ", err)
 		}
 
