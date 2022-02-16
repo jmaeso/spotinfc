@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"time"
+
+	nfc "github.com/clausecker/nfc/v2"
 )
 
 func main() {
@@ -14,6 +16,7 @@ func main() {
 	rfidReader, err := NewTagReader("")
 	if err != nil {
 		log.Println("Could not create NFC tag reader: ", err)
+		log.Println("NFC lib version: ", nfc.Version())
 
 		if err := ResetDevice(); err != nil {
 			log.Println("Could not reset device: ", err)
